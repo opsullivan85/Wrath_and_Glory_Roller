@@ -14,11 +14,15 @@ from io import StringIO
 parent_path = Path(wrath_and_glory_roller.__path__[0]).parent
 load_dotenv(dotenv_path=parent_path.joinpath('.env').__str__())
 
+# setup
 client = commands.Bot(command_prefix="prefix")
 slash = SlashCommand(client, sync_commands=True)  # Declares slash commands through the client.
 
+# regex used to parse rolling strings
+# see https://regex101.com/r/IFk7AD/4
 regex = r"(?:([+\-]?) *(\d+) *d *(\d+))|(?:([+\-*/]?) *(\d+))"
 
+# setup logging
 logging.basicConfig(level=logging.INFO, filename=parent_path.joinpath('logfile.log').__str__(),
                     format='%(asctime)s - %(threadName)s - %(name)s - %(levelname)s - %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S',
@@ -31,19 +35,48 @@ async def on_ready():
 
 
 def eval_sign(sign: str) -> int:
+    """ Utility to help parse arithmetic signs from regex
+
+    Parameters
+    ----------
+    sign: str
+        The sign to parse
+
+    Returns
+    -------
+    int
+        1 or -1
+    """
     if sign in ['', '+']:
         return 1
     elif sign == '-':
         return -1
 
 
-def eval_roll(roll: int) -> int:
-    if roll <= 3:
-        return 0
-    elif roll <= 5:
-        return 1
+def eval_roll(roll: int, dice: int) -> int:
+    """ Utility to help convert raw dice rolls into Wrath and Glory points
+
+    Parameters
+    ----------
+    roll: int
+        The actual value rolled
+    dice: int
+        The dice being rolled
+
+    Returns
+    -------
+    int
+        The value converted using the Wrath and Glory conversion system
+    """
+    if dice == 6:
+        if roll <= 3:
+            return 0
+        elif roll <= 5:
+            return 1
+        else:
+            return 2
     else:
-        return 2
+        return roll
 
 
 @slash.slash(name="roll",
@@ -56,24 +89,29 @@ def eval_roll(roll: int) -> int:
                      'required': True
                  }
              ])
-async def _roll(ctx: discord_slash.context.SlashContext,
-                rolling_string: str):  # Defines a new "context" (ctx) command called "ping."
+async def _roll(ctx: discord_slash.context.SlashContext, rolling_string: str):
+    # parse user input
     matches = re.findall(regex, rolling_string)
+
+    # log info
     logging.info('in _roll():\n'
                  f'\t{ctx.command = }\n'
                  f'\t{rolling_string = }\n'
                  f'\t{matches = }\n'
                  f'\t{ctx.channel = }\n'
                  f'\t{ctx.author = }')
-    if len(matches) > 0:
 
+    if len(matches) == 0:
+        await ctx.send('Could not parse your command, try something like "3d6 + 2"', hidden=True)
+    else:
         msg = StringIO()
         msg.write('Result: ')
 
-        total = 0
+        total_score = 0
 
+        # loop through each match in the user input
         for match in matches:
-            if match[1]:  # non-constant
+            if match[1]:  # dice roll
                 sign, rolls, dice, *_ = match
 
                 if sign:
@@ -89,16 +127,19 @@ async def _roll(ctx: discord_slash.context.SlashContext,
                 rolls = int(rolls)
                 dice = int(dice)
 
+                # Avoid long processing times and limit packet sizes
                 if rolls > 25:
                     await ctx.send('You cannot roll more than 25 dice', hidden=True)
                     return
 
                 for i in range(rolls):
                     roll = randint(1, dice)
+                    total_score += sign * eval_roll(roll, dice)
+
                     msg.write(str(roll))
                     if i < rolls - 1:
                         msg.write(', ')
-                    total += sign * eval_roll(roll)
+
                 msg.write(') ')
 
             else:  # constant
@@ -114,12 +155,10 @@ async def _roll(ctx: discord_slash.context.SlashContext,
                 sign = eval_sign(sign)
                 num = int(num)
 
-                total += sign * num
+                total_score += sign * num
 
-        msg.write(f'\nTotal: {total}')
+        msg.write(f'\nTotal: {total_score}')
         await ctx.send(msg.getvalue())
-    else:
-        await ctx.send('Could not parse your command, try something like "3d6 + 2"', hidden=True)
 
 
 client.run(os.getenv('TOKEN'))
